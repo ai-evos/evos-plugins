@@ -40,12 +40,12 @@ If the copy command doesn't find the file, run `/plugin` to see where the plugin
 
 Then edit it:
 
-- **`role`:** a sentence or two about what your work looks like. This shapes what the log emphasizes. Examples:
+- `role`**:** a sentence or two about what your work looks like. This shapes what the log emphasizes. Examples:
   - "QA engineer. My work is verifying tickets in the QA column, regression testing before releases, and filing bugs in Linear."
   - "Forward deployed engineer for Acme and Globex. Most of my work is customer calls, email, and deployment config in the customer-configs repo."
   - "Engineering manager for the platform team. My work is 1:1s, planning, PR reviews, hiring, and cross-team coordination."
-- **`repo_roots`:** the folder(s) holding your repos (e.g. `~/code`). Every direct child with a `.git` folder gets scanned. Repos you worked in through Claude Code or Cursor are picked up automatically even without this. Leave it empty if you don't write code.
-- **`standup`:** your standup headings, how many plan bullets you want, and optionally an `example` plans bullet written the way you'd say it. The example is the best way to get plans in your own voice.
+- `repo_roots`**:** the folder(s) holding your repos (e.g. `~/code`). Every direct child with a `.git` folder gets scanned. Repos you worked in through Claude Code or Cursor are picked up automatically even without this. Leave it empty if you don't write code.
+- `standup`**:** your standup headings, how many plan bullets you want, and optionally an `example` plans bullet written the way you'd say it. The example is the best way to get plans in your own voice.
 
 | Setting                                        | Default                                                 | Notes                                                                                                       |
 | ---------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -76,6 +76,13 @@ gh auth status       # should show you as logged in
 ```
 
 If your org uses SSO, authorize the CLI's token for the org when GitHub prompts you (or under GitHub → Settings → Applications). To keep personal repos out of your log, set `github.orgs` in your config, for example `"github": {"orgs": ["your-org"]}`.
+
+The default `gh auth login` is all you need. Reviews and opened PRs come from two GitHub sources, merged and deduplicated on every run:
+
+- **Contributions** (`contributionsCollection`, the data behind your profile's contribution graph). With the default `gh` login, GitHub hides private-repo activity here. It also seems to record only one review per PR, so a "changes requested" followed by an approval shows up as one.
+- **Search** (`reviewed-by:`, `author:`), which reads reviews straight off each PR. It sees every repo you can read, so it covers what contributions miss.
+
+Optional: to get private-repo data from contributions too, sign in to `gh` with a personal access token that can read your private repos, using `gh auth login --with-token`. Such a token is broader and longer-lived than the default login, so give it an expiry and never paste it anywhere. This isn't needed for the log to be complete.
 
 ## Use it
 
@@ -152,7 +159,7 @@ Doing this right after a chat ends works best. The summary is most accurate whil
 - **Claude Code:** `~/.claude/projects/**/*.jsonl`. Reads the prompts you typed and their times, which files were edited, git commands that were run, text Claude Code wrote to your notes files (matching `notes_patterns`), and Claude Code's own summaries from long sessions. It doesn't read Claude's replies or file contents.
 - **Cursor:** `~/Library/Application Support/Cursor/User/` (`globalStorage/state.vscdb` and `workspaceStorage/*`). The database is copied to a temp file and read from the copy, so Cursor's live file is never touched. Cursor's storage format isn't documented and changes between versions; if Cursor shows `unsupported_schema` or an error, everything else still works.
 - **Git:** `git log` for your own commits in the window.
-- **GitHub:** via `gh api`, with your own login. PR titles, states, review outcomes and comment counts, and the summary text of reviews you wrote. It doesn't read code, diffs, or the contents of inline review comments.
+- **GitHub:** via `gh api`, with your own login. PR titles, descriptions, and states, review outcomes, and the text of your own reviews and comments: review summaries, inline review comments (with file and line), and comments outside a review. All text is clipped and redacted. It reads other people's comments only to find yours, and doesn't keep them. It doesn't read code or diffs.
 - Obvious secrets (API keys, tokens, `password=` strings) are redacted before anything reaches Claude.
 - Full session records (your prompts and notes, redacted) are written to `~/.cache/daily-worklog/<date>/`. The folder is readable only by you and replaced on each run for that date. Delete it at any time.
 - The log summarizes. It doesn't paste emails, Slack messages, or code. The detailed sections paraphrase your own prompts and notes, since they're your private record.
@@ -173,6 +180,8 @@ Each source reports a `status`. `not_found` means the folder doesn't exist (for 
 | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | GitHub shows `not_installed` or `not_authenticated`                      | `brew install gh && gh auth login`. With SSO, authorize the token for your org                                                            |
 | GitHub shows an `error:`                                                 | Run `gh auth status`. Usually an SSO authorization or an expired login                                                                    |
+| GitHub shows `partial` or `truncated`                                    | Some GitHub queries failed (see `errors`) or hit the page limit. The rest of the GitHub data is still used                                |
+| GitHub shows `restricted_contributions` above 0                          | Expected with the default `gh` login: GitHub hides private-repo activity from contributions. Search covers it (entries show `"source": "search"`) |
 | A connector is missing from the log                                      | Check it in claude.ai under Settings → Connectors, then run `/mcp` in Claude Code. If it's not listed, run `/login` with the same account |
 | "Incompatible auth server: does not support dynamic client registration" | That server was added to Claude Code directly. Remove it and use the claude.ai connector instead                                          |
 | The log says `collect_local.py` is missing                               | The `scripts/` folder didn't install. Reinstall the plugin, or check that your copy has `skills/daily-worklog/scripts/collect_local.py`   |

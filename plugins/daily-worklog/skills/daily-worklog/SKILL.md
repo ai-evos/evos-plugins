@@ -51,10 +51,14 @@ Each Claude Code session includes:
 
 The `github` source contains:
 
-- `reviews_submitted`: reviews the user gave in the window, each with the PR, the review state (APPROVED, CHANGES_REQUESTED, COMMENTED), the number of inline comments, and the review's summary text if the user wrote one. For the Focus column, use that summary, plus any Claude Code session where the user reviewed the PR. Otherwise leave Focus blank rather than guess.
+- `reviews_submitted`: reviews the user gave in the window, each with the PR, the review state (APPROVED, CHANGES_REQUESTED, COMMENTED), the number of inline comments, `review_comment_details` (each inline comment's file, line and text), and the review's summary text if the user wrote one. For the Focus column, use that summary and the substance of the inline comments (what the user asked about or asked to change), plus any Claude Code session where the user reviewed the PR. Otherwise leave Focus blank rather than guess.
 - `prs_opened` and `prs_merged`: the user's own PRs opened or merged in the window.
-- `prs_commented_on`: PRs the user commented on outside a formal review.
+- `prs_commented_on`: PRs the user commented on outside a formal review, with `my_comments` (the text of each comment in the window). Summarize what the user raised or answered, not how many comments they left. A PR the user also reviewed appears in both lists; write it up as one entry.
+
+Every PR carries a `description` (the start of the PR body). Use it to say in a few words what the PR does, so a review or comment reads as "reviewed X, which does Y" rather than just a PR number. Don't paste it.
 - `review_requests_open` and `my_open_prs`: current state, not limited to the window. These are the user's review queue and their PRs still in flight, which feed the plans.
+
+Reviews and opened PRs merge two GitHub sources, and each entry's `source` says which one found it. That's for debugging; don't mention it in the log. A status of `partial` means some queries failed (see `errors`): use what came back and note under "Not checked" that GitHub may be incomplete. Do the same if `truncated` is present.
 
 If its status is `not_installed` or `not_authenticated`, list GitHub under "Not checked" with the hint (`brew install gh && gh auth login`).
 

@@ -659,46 +659,82 @@ def collect_git(cfg, start, end, extra_repo_paths):
 # GitHub (via gh CLI)
 # --------------------------------------------------------------------------- #
 PR_FIELDS = """
-  number title url state isDraft merged mergedAt headRefName updatedAt
+  number title body url state isDraft merged mergedAt headRefName updatedAt
   reviewDecision author { login } repository { nameWithOwner }
 """
 
-GH_QUERY = """
-query($from: DateTime!, $to: DateTime!, $merged: String!, $requested: String!,
-      $commented: String!, $mine: String!) {
-  viewer {
-    login
-    contributionsCollection(from: $from, to: $to) {
-      pullRequestReviewContributions(first: 100) {
-        nodes {
-          occurredAt
-          pullRequestReview { state url body comments { totalCount } }
-          pullRequest { %(f)s }
-        }
-      }
-      pullRequestContributions(first: 100) {
-        nodes { occurredAt pullRequest { %(f)s } }
-      }
+REVIEW_FIELDS = """
+  state url body submittedAt
+  comments(first: 50) { totalCount nodes { path line originalLine body url } }
+"""
+
+PAGE_INFO = "pageInfo { hasNextPage endCursor }"
+
+CONTRIB_QUERY = """
+query($from: DateTime!, $to: DateTime!, $after: String) {
+  viewer { contributionsCollection(from: $from, to: $to) {
+    restrictedContributionsCount
+    %(conn)s(first: 100, after: $after) {
+      %(pi)s
+      nodes { occurredAt %(extra)s pullRequest { %(f)s } }
     }
-  }
-  merged: search(query: $merged, type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { %(f)s } }
-  }
-  requested: search(query: $requested, type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { %(f)s } }
-  }
-  commented: search(query: $commented, type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { %(f)s } }
-  }
-  mine: search(query: $mine, type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { %(f)s } }
+  } }
+}
+"""
+
+SEARCH_QUERY = """
+query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: %(n)d, after: $after) {
+    %(pi)s
+    nodes { ... on PullRequest { %(f)s %(extra)s } }
   }
 }
-""" % {"f": PR_FIELDS}
+"""
+
+GH_MAX_PAGES = 10
 
 
 def _gh(args, timeout=45):
     return subprocess.run(["gh"] + args, capture_output=True, text=True, timeout=timeout)
+
+
+def _graphql(query, variables):
+    """Run one GraphQL request; return its `data` or raise RuntimeError."""
+    args = ["api", "graphql", "-f", f"query={query}"]
+    for k, v in variables.items():
+        if v is not None:
+            args += ["-f", f"{k}={v}"]
+    try:
+        out = _gh(args)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(str(e))
+    try:
+        data = json.loads(out.stdout or "{}")
+    except json.JSONDecodeError:
+        data = {}
+    if out.returncode != 0 or not isinstance(data, dict) or not data.get("data"):
+        msg = (data.get("errors") or [{}])[0].get("message") if isinstance(data, dict) else None
+        raise RuntimeError(msg or out.stderr.strip()[:200] or "empty response")
+    return data["data"]
+
+
+def _paged(query, variables, path):
+    """Follow a connection's cursor (at `path` in the response) across pages.
+
+    Returns (nodes, first_page_data, truncated)."""
+    nodes, first, after = [], None, None
+    for _ in range(GH_MAX_PAGES):
+        data = _graphql(query, dict(variables, after=after))
+        first = first or data
+        conn = data
+        for key in path:
+            conn = (conn or {}).get(key) or {}
+        nodes += [n for n in conn.get("nodes") or [] if n]
+        info = conn.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            return nodes, first, False
+        after = info.get("endCursor")
+    return nodes, first, True
 
 
 def _pr(node):
@@ -708,6 +744,7 @@ def _pr(node):
         "repo": (node.get("repository") or {}).get("nameWithOwner"),
         "number": node.get("number"),
         "title": redact(node.get("title") or ""),
+        "description": clip(redact(node.get("body") or ""), 800) or None,
         "url": node.get("url"),
         "state": "MERGED" if node.get("merged") else node.get("state"),
         "draft": node.get("isDraft"),
@@ -716,6 +753,32 @@ def _pr(node):
         "review_decision": node.get("reviewDecision"),
         "merged_at": node.get("mergedAt"),
         "updated_at": node.get("updatedAt"),
+    }
+
+
+def _own_text(body, limit):
+    """The user's words from a comment: drop quoted (`> `) lines, then clip."""
+    lines = [l for l in (body or "").splitlines() if not l.lstrip().startswith(">")]
+    return clip(redact("\n".join(lines).strip()), limit)
+
+
+def _review(rv, when, pr, source):
+    comments = rv.get("comments") or {}
+    return {
+        "time": iso_local(when),
+        "review_state": rv.get("state"),   # APPROVED / CHANGES_REQUESTED / COMMENTED
+        "review_comments": comments.get("totalCount"),
+        "review_url": rv.get("url"),
+        "review_summary": _own_text(rv.get("body"), 500) or None,
+        "review_comment_details": [{
+            "path": c.get("path"),
+            # `line` is null once the code moves on; fall back to where it was.
+            "line": c.get("line") or c.get("originalLine"),
+            "body": _own_text(c.get("body"), 400),
+            "url": c.get("url"),
+        } for c in comments.get("nodes") or []],
+        "source": source,
+        "pr": pr,
     }
 
 
@@ -738,30 +801,63 @@ def collect_github(cfg, start, end):
     if who.returncode != 0 or not login:
         return {"status": f"error: {who.stderr.strip()[:200]}"}
 
-    rng = f"{start.isoformat(timespec='seconds')}..{end.isoformat(timespec='seconds')}"
-    variables = {
+    since = start.isoformat(timespec="seconds")
+    rng = f"{since}..{end.isoformat(timespec='seconds')}"
+    window = {
         "from": start.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "to": end.astimezone(timezone.utc).isoformat(timespec="seconds"),
-        "merged": f"is:pr author:{login} merged:{rng}",
-        "requested": f"is:pr is:open archived:false review-requested:{login}",
-        "commented": f"is:pr commenter:{login} updated:{rng}",
-        "mine": f"is:pr is:open archived:false author:{login}",
     }
-    args = ["api", "graphql", "-f", f"query={GH_QUERY}"]
-    for k, v in variables.items():
-        args += ["-f", f"{k}={v}"]
-    try:
-        out = _gh(args)
-    except (OSError, subprocess.SubprocessError) as e:
-        return {"status": f"error: {e}"}
-    try:
-        data = json.loads(out.stdout or "{}")
-    except json.JSONDecodeError:
-        data = {}
-    if out.returncode != 0 or "data" not in data:
-        msg = (data.get("errors") or [{}])[0].get("message") if isinstance(data, dict) else None
-        return {"status": f"error: {msg or out.stderr.strip()[:200]}"}
-    d = data["data"]
+    by_login = json.dumps(login)
+
+    # Reviews and opened PRs come from BOTH contributionsCollection and search,
+    # every run, then get merged. contributionsCollection hides activity it
+    # counts as "restricted" (e.g. private org repos, depending on org/profile
+    # settings); search only needs repo read access. Searches whose results are
+    # filtered by timestamp below use open-ended ranges, since a PR touched
+    # after the window still qualifies.
+    contrib = {
+        "c_reviews": ("pullRequestReviewContributions",
+                      "pullRequestReview { %s }" % REVIEW_FIELDS),
+        "c_opened": ("pullRequestContributions", ""),
+    }
+    searches = {  # key: (query, page size, extra PR fields)
+        "merged": (f"is:pr author:{login} merged:{rng}", 50, ""),
+        "requested": (f"is:pr is:open archived:false review-requested:{login}", 50, ""),
+        "mine": (f"is:pr is:open archived:false author:{login}", 50, ""),
+        "opened": (f"is:pr author:{login} created:>={since}", 50, "createdAt"),
+        "commented": (f"is:pr commenter:{login} updated:>={since}", 50,
+                      "comments(last: 100) { nodes { author { login } createdAt body url } }"),
+        "reviewed": (f"is:pr reviewed-by:{login} updated:>={since}", 25,
+                     "reviews(last: 50, author: %s) { nodes { %s } }"
+                     % (by_login, REVIEW_FIELDS)),
+    }
+
+    results, errors, truncated = {}, {}, []
+    restricted = None
+    for key, (conn, extra) in contrib.items():
+        q = CONTRIB_QUERY % {"conn": conn, "extra": extra, "pi": PAGE_INFO, "f": PR_FIELDS}
+        try:
+            nodes, first, more = _paged(q, window, ["viewer", "contributionsCollection", conn])
+        except RuntimeError as e:
+            errors[key] = str(e)
+            continue
+        results[key] = nodes
+        restricted = (((first.get("viewer") or {}).get("contributionsCollection") or {})
+                      .get("restrictedContributionsCount"))
+        if more:
+            truncated.append(key)
+    for key, (search, n, extra) in searches.items():
+        q = SEARCH_QUERY % {"n": n, "extra": extra, "pi": PAGE_INFO, "f": PR_FIELDS}
+        try:
+            nodes, _, more = _paged(q, {"q": search}, ["search"])
+        except RuntimeError as e:
+            errors[key] = str(e)
+            continue
+        results[key] = nodes
+        if more:
+            truncated.append(key)
+    if not results:
+        return {"status": f"error: {next(iter(errors.values()))}"}
 
     orgs = [o.lower() for o in cfg["github"].get("orgs") or []]
 
@@ -770,47 +866,78 @@ def collect_github(cfg, start, end):
             return False
         return not orgs or pr["repo"].split("/")[0].lower() in orgs
 
-    cc = (d.get("viewer") or {}).get("contributionsCollection") or {}
-
-    reviews = []
-    for n in (cc.get("pullRequestReviewContributions") or {}).get("nodes") or []:
+    reviews, seen = [], set()
+    for n in results.get("c_reviews", []):
         pr = _pr(n.get("pullRequest"))
+        rv = n.get("pullRequestReview") or {}
+        if keep(pr) and rv.get("url") not in seen:
+            seen.add(rv.get("url"))
+            reviews.append(_review(rv, parse_iso(n.get("occurredAt")), pr, "contributions"))
+    for n in results.get("reviewed", []):
+        pr = _pr(n)
         if not keep(pr):
             continue
-        rv = n.get("pullRequestReview") or {}
-        reviews.append({
-            "time": iso_local(parse_iso(n.get("occurredAt"))),
-            "review_state": rv.get("state"),   # APPROVED / CHANGES_REQUESTED / COMMENTED
-            "review_comments": (rv.get("comments") or {}).get("totalCount"),
-            "review_url": rv.get("url"),
-            "review_summary": clip(redact(rv.get("body") or ""), 500) or None,
-            "pr": pr,
-        })
+        for rv in (n.get("reviews") or {}).get("nodes") or []:
+            when = parse_iso(rv.get("submittedAt"))
+            if rv.get("url") not in seen and in_window(when, start, end):
+                seen.add(rv.get("url"))
+                reviews.append(_review(rv, when, pr, "search"))
 
-    opened = []
-    for n in (cc.get("pullRequestContributions") or {}).get("nodes") or []:
+    opened, seen = [], set()
+    for n in results.get("c_opened", []):
         pr = _pr(n.get("pullRequest"))
-        if keep(pr):
-            opened.append(dict(pr, opened_at=iso_local(parse_iso(n.get("occurredAt")))))
+        if keep(pr) and pr["url"] not in seen:
+            seen.add(pr["url"])
+            opened.append(dict(pr, opened_at=iso_local(parse_iso(n.get("occurredAt"))),
+                               source="contributions"))
+    for n in results.get("opened", []):
+        pr = _pr(n)
+        when = parse_iso(n.get("createdAt"))
+        if keep(pr) and pr["url"] not in seen and in_window(when, start, end):
+            seen.add(pr["url"])
+            opened.append(dict(pr, opened_at=iso_local(when), source="search"))
+
+    # `commenter:` matches a PR you commented on at any time, so keep only PRs
+    # with a top-level comment of yours inside the window. Inline review
+    # comments are in reviews_submitted; a PR can appear in both lists.
+    commented = []
+    for n in results.get("commented", []):
+        pr = _pr(n)
+        if not keep(pr):
+            continue
+        mine = []
+        for c in (n.get("comments") or {}).get("nodes") or []:
+            when = parse_iso(c.get("createdAt"))
+            if (c.get("author") or {}).get("login") == login and in_window(when, start, end):
+                mine.append({"time": iso_local(when),
+                             "body": _own_text(c.get("body"), 400),
+                             "url": c.get("url")})
+        if mine:
+            commented.append(dict(pr, my_comments=mine))
 
     def search_list(key):
-        return [p for p in (_pr(n) for n in (d.get(key) or {}).get("nodes") or []) if keep(p)]
+        return [p for p in (_pr(n) for n in results.get(key, [])) if keep(p)]
 
-    reviewed_urls = {r["pr"]["url"] for r in reviews}
-    commented = [p for p in search_list("commented") if p["url"] not in reviewed_urls]
-
-    return {
-        "status": "ok",
+    out = {
+        "status": "ok" if not errors else "partial",
         "login": login,
         "orgs_filter": orgs or None,
+        # >0 means contributionsCollection hid activity in this window; the
+        # search side of the merge covers reviews and opened PRs.
+        "restricted_contributions": restricted,
         "reviews_submitted": sorted(reviews, key=lambda r: r["time"] or ""),
-        "prs_opened": opened,
+        "prs_opened": sorted(opened, key=lambda p: p["opened_at"] or ""),
         "prs_merged": search_list("merged"),
-        "prs_commented_on": commented,          # comments outside a formal review
+        "prs_commented_on": commented,          # top-level comments, outside a review
         # Current state, not limited to the window -- useful for plans:
         "review_requests_open": search_list("requested"),
         "my_open_prs": search_list("mine"),
     }
+    if errors:
+        out["errors"] = errors
+    if truncated:
+        out["truncated"] = truncated            # hit GH_MAX_PAGES; results incomplete
+    return out
 
 
 def read_preferences(path):
