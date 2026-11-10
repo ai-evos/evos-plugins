@@ -1,6 +1,8 @@
 {
-  "name": "meghana-evos-plugins",
-  "owner": { "name": "Meghana Bhimasani" },
+  "name": "evos-plugins",
+  "owner": {
+    "name": "Meghana Bhimasani"
+  },
   "plugins": [
     {
       "name": "daily-worklog",

@@ -17,8 +17,8 @@ macOS only.
 In Claude Code:
 
 ```
-/plugin marketplace add mbhimasani/evos-plugins
-/plugin install daily-worklog@meghana-evos-plugins
+/plugin marketplace add ai-evos/evos-plugins
+/plugin install daily-worklog@evos-plugins
 ```
 
 Restart Claude Code after installing so the skill loads.
@@ -33,7 +33,7 @@ You don't need all of them. The skill uses whatever is connected and lists the r
 
 ```bash
 mkdir -p ~/.config/daily-worklog
-cp ~/.claude/plugins/*/daily-worklog/skills/daily-worklog/config.example.json ~/.config/daily-worklog/config.json
+cp "$(ls -td ~/.claude/plugins/cache/evos-plugins/daily-worklog/*/ | head -1)skills/daily-worklog/config.example.json" ~/.config/daily-worklog/config.json
 ```
 
 If the copy command doesn't find the file, run `/plugin` to see where the plugin was installed.
@@ -176,17 +176,17 @@ python3 <plugin-dir>/skills/daily-worklog/scripts/collect_local.py --date today 
 
 Each source reports a `status`. `not_found` means the folder doesn't exist (for example, Cursor isn't installed), and that's fine.
 
-| Symptom                                                                  | Fix                                                                                                                                       |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub shows `not_installed` or `not_authenticated`                      | `brew install gh && gh auth login`. With SSO, authorize the token for your org                                                            |
-| GitHub shows an `error:`                                                 | Run `gh auth status`. Usually an SSO authorization or an expired login                                                                    |
-| GitHub shows `partial` or `truncated`                                    | Some GitHub queries failed (see `errors`) or hit the page limit. The rest of the GitHub data is still used                                |
+| Symptom                                                                  | Fix                                                                                                                                               |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub shows `not_installed` or `not_authenticated`                      | `brew install gh && gh auth login`. With SSO, authorize the token for your org                                                                    |
+| GitHub shows an `error:`                                                 | Run `gh auth status`. Usually an SSO authorization or an expired login                                                                            |
+| GitHub shows `partial` or `truncated`                                    | Some GitHub queries failed (see `errors`) or hit the page limit. The rest of the GitHub data is still used                                        |
 | GitHub shows `restricted_contributions` above 0                          | Expected with the default `gh` login: GitHub hides private-repo activity from contributions. Search covers it (entries show `"source": "search"`) |
-| A connector is missing from the log                                      | Check it in claude.ai under Settings → Connectors, then run `/mcp` in Claude Code. If it's not listed, run `/login` with the same account |
-| "Incompatible auth server: does not support dynamic client registration" | That server was added to Claude Code directly. Remove it and use the claude.ai connector instead                                          |
-| The log says `collect_local.py` is missing                               | The `scripts/` folder didn't install. Reinstall the plugin, or check that your copy has `skills/daily-worklog/scripts/collect_local.py`   |
-| Changes to the skill aren't showing up                                   | Installed plugin: `/plugin marketplace update meghana-evos-plugins`, then restart Claude Code. Using `--plugin-dir`: just restart         |
-| Cursor shows `unsupported_schema` or an error                            | Cursor changed its storage format. Everything else still works; report it so the parser can be updated                                    |
+| A connector is missing from the log                                      | Check it in claude.ai under Settings → Connectors, then run `/mcp` in Claude Code. If it's not listed, run `/login` with the same account         |
+| "Incompatible auth server: does not support dynamic client registration" | That server was added to Claude Code directly. Remove it and use the claude.ai connector instead                                                  |
+| The log says `collect_local.py` is missing                               | The `scripts/` folder didn't install. Reinstall the plugin, or check that your copy has `skills/daily-worklog/scripts/collect_local.py`           |
+| Changes to the skill aren't showing up                                   | Installed plugin: follow [Updating](#updating), then restart Claude Code. Using `--plugin-dir`: just restart                 |
+| Cursor shows `unsupported_schema` or an error                            | Cursor changed its storage format. Everything else still works; report it so the parser can be updated                                            |
 
 ## Repo layout
 
@@ -204,10 +204,11 @@ plugins/daily-worklog/
 
 ## Updating
 
-To get the latest version:
+To get the latest version, run these in a terminal:
 
-```
-/plugin marketplace update meghana-evos-plugins
+```bash
+claude plugin marketplace update evos-plugins
+claude plugin update daily-worklog@evos-plugins
 ```
 
 Then restart Claude Code. Your config and preferences live in `~/.config/daily-worklog/` and aren't touched by updates.
