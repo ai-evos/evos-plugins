@@ -1,9 +1,7 @@
 ---
-
-## name: daily-worklog
+name: daily-worklog
 description: Generate a daily work log and standup update from everything the user actually did in a day — Claude Code CLI sessions, Cursor chats, git commits across repos, GitHub pull requests (reviews given, PRs opened and merged, review requests), Linear issues and status changes, Slack messages they sent, emails they replied to, and meetings they attended (Google Calendar + Granola notes) — and save it as a dated markdown file. Works for any role (engineers, QA, forward deployed engineers, engineering managers). Use this whenever the user asks for a standup, daily update, scrum update, end-of-day summary, work log, "what did I do today/yesterday", "what did I ship", a weekly recap built from daily activity, or when a scheduled task asks to run the daily worklog. Also use it when the user gives feedback on a work log or standup ("that bullet is wrong", "don't include X", "remember this for next time") or asks to view or change their worklog preferences. Prefer this over a generic standup skill.
-
-
+---
 
 # Daily worklog
 
@@ -192,9 +190,9 @@ Use this structure, with the configured headings in place of the angle-bracket l
 **<blockers heading>:** <bullets, or "None">
 
 ## Timeline
-| Time | Duration | Activity | Workstream |
-|---|---|---|---|
-| <9:40–11:15> | <~1h 35m> | <Claude Code session: …> | <…> |
+| Time         | Duration  | Activity                 | Workstream |
+| ------------ | --------- | ------------------------ | ---------- |
+| <9:40–11:15> | <~1h 35m> | <Claude Code session: …> | <…>        |
 
 ## Workstreams
 ### <Workstream name> (<LINEAR-ID or customer> · <status>)
@@ -219,12 +217,12 @@ Use this structure, with the configured headings in place of the angle-bracket l
 
 ## Linear
 | Issue | Title | Status | Change in window |
-|---|---|---|---|
+| ----- | ----- | ------ | ---------------- |
 
 ## Pull requests
 **Reviewed**
-| PR | Author | Outcome | Comments | Focus |
-|---|---|---|---|---|
+| PR  | Author | Outcome | Comments | Focus |
+| --- | ------ | ------- | -------- | ----- |
 
 **Mine:** <opened / merged / changes requested, with links>
 
@@ -239,7 +237,7 @@ Use this structure, with the configured headings in place of the angle-bracket l
 
 ## Activity by repo
 | Repo | Commits | Claude Code sessions | Cursor chats |
-|---|---|---|---|
+| ---- | ------- | -------------------- | ------------ |
 
 ---
 Sources: <checked sources> · Not checked: <missing/failed sources>
